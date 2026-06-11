@@ -43,9 +43,8 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
         
-        // Dynamically grab the frontend URL from application.properties
-        configuration.setAllowedOrigins(List.of(appProperties.getFrontendUrl()));
-        configuration.setAllowedOriginPatterns(List.of("*"));
+        // 👇 THE FIX: Everything goes into OriginPatterns. No more allowedOrigins!
+        configuration.setAllowedOriginPatterns(Arrays.asList(appProperties.getFrontendUrl(), "http://localhost:5173", "http://127.0.0.1:5173"));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);
