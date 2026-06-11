@@ -1,5 +1,7 @@
 package com.incubatorsshop.backend.controller;
 
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
 import com.incubatorsshop.backend.entity.Order;
 import com.incubatorsshop.backend.entity.OrderStatus;
 import com.incubatorsshop.backend.entity.Product;
@@ -12,13 +14,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @RestController
@@ -29,11 +28,14 @@ public class ProductController {
     private final ProductRepository productRepository;
     private final ReviewRepository reviewRepository;
     private final OrderRepository orderRepository;
+    private final Cloudinary cloudinary; // Added Cloudinary
 
-    public ProductController(ProductRepository productRepository, ReviewRepository reviewRepository, OrderRepository orderRepository) {
+    // Constructor Injection updated to include Cloudinary
+    public ProductController(ProductRepository productRepository, ReviewRepository reviewRepository, OrderRepository orderRepository, Cloudinary cloudinary) {
         this.productRepository = productRepository;
         this.reviewRepository = reviewRepository;
         this.orderRepository = orderRepository;
+        this.cloudinary = cloudinary;
     }
 
     // ==========================================
@@ -75,7 +77,7 @@ public class ProductController {
             @RequestParam("capacity") String capacity,
             @RequestParam("warranty") String warranty,
             @RequestParam("shippingOptions") String shippingOptions,
-            @RequestParam(value = "active", defaultValue = "true") Boolean active, // Accepts the visibility toggle
+            @RequestParam(value = "active", defaultValue = "true") Boolean active,
             @RequestParam(value = "images", required = false) List<MultipartFile> images,
             @RequestParam(value = "videos", required = false) List<MultipartFile> videos) {
 
@@ -101,7 +103,7 @@ public class ProductController {
             @RequestParam("capacity") String capacity,
             @RequestParam("warranty") String warranty,
             @RequestParam("shippingOptions") String shippingOptions,
-            @RequestParam(value = "active", defaultValue = "true") Boolean active, // Accepts the visibility toggle
+            @RequestParam(value = "active", defaultValue = "true") Boolean active,
             @RequestParam(value = "existingImageUrls", defaultValue = "") String existingImageUrls,
             @RequestParam(value = "existingVideoUrls", defaultValue = "") String existingVideoUrls,
             @RequestParam(value = "images", required = false) List<MultipartFile> images,
@@ -188,30 +190,37 @@ public class ProductController {
 
         String finalImages = (existingImages != null && !existingImages.isEmpty()) ? existingImages : "";
         if (imgs != null && !imgs.isEmpty()) {
-            String newUrls = saveMediaFiles(imgs, "uploads/images/");
+            String newUrls = saveMediaFiles(imgs, "images"); // Sent to Cloudinary 'incubators/images'
             finalImages = finalImages.isEmpty() ? newUrls : finalImages + "," + newUrls;
         }
         product.setImageUrl(finalImages.isEmpty() ? null : finalImages);
 
         String finalVideos = (existingVideos != null && !existingVideos.isEmpty()) ? existingVideos : "";
         if (vids != null && !vids.isEmpty()) {
-            String newUrls = saveMediaFiles(vids, "uploads/videos/");
+            String newUrls = saveMediaFiles(vids, "videos"); // Sent to Cloudinary 'incubators/videos'
             finalVideos = finalVideos.isEmpty() ? newUrls : finalVideos + "," + newUrls;
         }
         product.setVideoUrl(finalVideos.isEmpty() ? null : finalVideos);
     }
 
-    private String saveMediaFiles(List<MultipartFile> files, String directory) throws IOException {
+    // UPDATED: Now uploads directly to Cloudinary instead of the local hard drive
+    private String saveMediaFiles(List<MultipartFile> files, String folderName) throws IOException {
         List<String> filePaths = new ArrayList<>();
-        File dir = new File(directory);
-        if (!dir.exists()) dir.mkdirs();
 
         for (MultipartFile file : files) {
             if (!file.isEmpty()) {
-                String fileName = System.currentTimeMillis() + "_" + file.getOriginalFilename().replaceAll("[^a-zA-Z0-9\\.\\-]", "_");
-                Path path = Paths.get(directory + fileName);
-                Files.write(path, file.getBytes());
-                filePaths.add("/" + directory + fileName);
+                // Upload the file to Cloudinary automatically
+                @SuppressWarnings("rawtypes")
+                Map uploadResult = cloudinary.uploader().upload(file.getBytes(), 
+                    ObjectUtils.asMap(
+                        "resource_type", "auto", // Auto detects if it's an image or video
+                        "folder", "incubators/" + folderName
+                    )
+                );
+                
+                // Get the permanent secure HTTPS URL Cloudinary generates
+                String secureUrl = uploadResult.get("secure_url").toString();
+                filePaths.add(secureUrl);
             }
         }
         return String.join(",", filePaths);
