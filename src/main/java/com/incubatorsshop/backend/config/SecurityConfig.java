@@ -43,8 +43,11 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
         
-        // 👇 THE FIX: Everything goes into OriginPatterns. No more allowedOrigins!
-        configuration.setAllowedOriginPatterns(Arrays.asList(appProperties.getFrontendUrl(), "http://localhost:5173", "http://127.0.0.1:5173"));
+        // Explicitly add your specific URLs here
+        configuration.setAllowedOriginPatterns(Arrays.asList(
+            "http://localhost:5173", 
+            "https://venkat-incubators-shop-qez3af2cf.vercel.app"
+        ));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);
