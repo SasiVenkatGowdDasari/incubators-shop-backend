@@ -203,26 +203,28 @@ public class ProductController {
         product.setVideoUrl(finalVideos.isEmpty() ? null : finalVideos);
     }
 
-    // UPDATED: Now uploads directly to Cloudinary instead of the local hard drive
-    private String saveMediaFiles(List<MultipartFile> files, String folderName) throws IOException {
-        List<String> filePaths = new ArrayList<>();
+// Inside ProductController.java
+private String saveMediaFiles(List<MultipartFile> files, String folderName) throws IOException {
+    List<String> filePaths = new ArrayList<>();
 
-        for (MultipartFile file : files) {
-            if (!file.isEmpty()) {
-                // Upload the file to Cloudinary automatically
-                @SuppressWarnings("rawtypes")
-                Map uploadResult = cloudinary.uploader().upload(file.getBytes(), 
+    for (MultipartFile file : files) {
+        if (!file.isEmpty()) {
+            // 1. Check size BEFORE uploading (Max 10MB)
+            if (file.getSize() > 10 * 1024 * 1024) { 
+                throw new IOException("File too large: " + file.getOriginalFilename() + ". Please compress it to under 10MB.");
+            }
+
+            // 2. Stream the file directly from the input stream to Cloudinary (Saves RAM)
+            Map uploadResult = cloudinary.uploader().upload(file.getInputStream(), 
                     ObjectUtils.asMap(
-                        "resource_type", "auto", // Auto detects if it's an image or video
+                        "resource_type", "auto",
                         "folder", "incubators/" + folderName
                     )
-                );
-                
-                // Get the permanent secure HTTPS URL Cloudinary generates
-                String secureUrl = uploadResult.get("secure_url").toString();
-                filePaths.add(secureUrl);
-            }
+            );
+            
+            filePaths.add(uploadResult.get("secure_url").toString());
         }
-        return String.join(",", filePaths);
     }
+    return String.join(",", filePaths);
+}
 }
