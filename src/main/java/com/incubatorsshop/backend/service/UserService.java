@@ -1,26 +1,29 @@
 package com.incubatorsshop.backend.service;
 
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
 import com.incubatorsshop.backend.dto.RegistrationRequest;
 import com.incubatorsshop.backend.dto.UserUpdateRequest;
 import com.incubatorsshop.backend.entity.User;
 import com.incubatorsshop.backend.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+
+import java.util.Map;
 
 @Service
 public class UserService {
 
     private final UserRepository userRepository;
+    private final Cloudinary cloudinary; // <-- ADDED CLOUDINARY
 
-    public UserService(UserRepository userRepository) {
+    // <-- UPDATED CONSTRUCTOR
+    public UserService(UserRepository userRepository, Cloudinary cloudinary) {
         this.userRepository = userRepository;
+        this.cloudinary = cloudinary;
     }
 
-    // --- NEW: DIRECT REGISTRATION METHOD ---
+    // --- DIRECT REGISTRATION METHOD ---
     public User registerDirectly(RegistrationRequest request) throws Exception {
         if (userRepository.findByMobileNumber(request.getMobileNumber()) != null) {
             throw new Exception("Mobile number already exists.");
@@ -49,16 +52,18 @@ public class UserService {
         user.setAddress(request.getAddress());
 
         if (profilePicture != null && !profilePicture.isEmpty()) {
-            String uploadDir = "uploads/";
-            File dir = new File(uploadDir);
-            if (!dir.exists()) {
-                dir.mkdirs(); 
-            }
+            // <-- REPLACED LOCAL STORAGE WITH CLOUDINARY UPLOAD
+            @SuppressWarnings("rawtypes")
+            Map uploadResult = cloudinary.uploader().upload(profilePicture.getBytes(), 
+                ObjectUtils.asMap(
+                    "resource_type", "auto",
+                    "folder", "incubators/profiles"
+                )
+            );
             
-            String fileName = System.currentTimeMillis() + "_" + profilePicture.getOriginalFilename().replaceAll("\\s+", "_");
-            Path filePath = Paths.get(uploadDir, fileName);
-            Files.write(filePath, profilePicture.getBytes());
-            user.setProfilePicturePath(fileName);
+            // Get the secure HTTPS URL and save it to the user profile
+            String secureUrl = uploadResult.get("secure_url").toString();
+            user.setProfilePicturePath(secureUrl);
         }
 
         return userRepository.save(user);

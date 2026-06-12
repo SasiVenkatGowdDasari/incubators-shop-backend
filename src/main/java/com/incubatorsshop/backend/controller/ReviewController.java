@@ -1,34 +1,36 @@
 package com.incubatorsshop.backend.controller;
 
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
 import com.incubatorsshop.backend.entity.Review;
 import com.incubatorsshop.backend.entity.ReviewMedia;
 import com.incubatorsshop.backend.repository.ReviewMediaRepository;
 import com.incubatorsshop.backend.repository.ReviewRepository;
 import com.incubatorsshop.backend.service.ReviewService;
-import com.incubatorsshop.backend.service.FileStorageService;
-import com.incubatorsshop.backend.service.EmailService; // <-- ADDED IMPORT
+import com.incubatorsshop.backend.service.EmailService;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/reviews")
-//@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(origins = "*") // Updated for deployment
 public class ReviewController {
 
     private final ReviewService reviewService;
     private final ReviewRepository reviewRepository;
     private final ReviewMediaRepository reviewMediaRepository;
-    private final FileStorageService fileStorageService;
-    private final EmailService emailService; // <-- ADDED
+    private final Cloudinary cloudinary; // <-- REPLACED FileStorageService
+    private final EmailService emailService;
 
-    // <-- UPDATED CONSTRUCTOR
-    public ReviewController(ReviewService rs, ReviewRepository rr, ReviewMediaRepository rmr, FileStorageService fss, EmailService emailService) {
+    public ReviewController(ReviewService rs, ReviewRepository rr, ReviewMediaRepository rmr, Cloudinary cloudinary, EmailService emailService) {
         this.reviewService = rs;
         this.reviewRepository = rr;
         this.reviewMediaRepository = rmr;
-        this.fileStorageService = fss;
+        this.cloudinary = cloudinary;
         this.emailService = emailService;
     }
     
@@ -48,24 +50,34 @@ public class ReviewController {
 
             if (files != null) {
                 for (MultipartFile file : files) {
-                    String path = fileStorageService.store(file);
-                    ReviewMedia media = new ReviewMedia();
-                    media.setReview(review);
-                    media.setFilePath(path);
-                    media.setFileType(file.getContentType() != null && file.getContentType().startsWith("image") ? "IMAGE" : "VIDEO");
-                    reviewMediaRepository.save(media);
+                    if (!file.isEmpty()) {
+                        // Upload file to Cloudinary
+                        @SuppressWarnings("rawtypes")
+                        Map uploadResult = cloudinary.uploader().upload(file.getBytes(),
+                            ObjectUtils.asMap(
+                                "resource_type", "auto",
+                                "folder", "incubators/reviews"
+                            )
+                        );
+
+                        // Extract permanent Cloudinary URL
+                        String secureUrl = uploadResult.get("secure_url").toString();
+
+                        ReviewMedia media = new ReviewMedia();
+                        media.setReview(review);
+                        media.setFilePath(secureUrl); // Store URL instead of local path
+                        media.setFileType(file.getContentType() != null && file.getContentType().startsWith("image") ? "IMAGE" : "VIDEO");
+                        reviewMediaRepository.save(media);
+                    }
                 }
             }
             
-            // --- NEW: Trigger Thank You Email ---
-            // We run this asynchronously so the user's browser doesn't hang waiting for the email to send
-            new Thread(() -> {
-                try {
-                    emailService.sendReviewThankYouEmail(review.getUser(), review.getProduct());
-                } catch (Exception e) {
-                    System.err.println("Failed to send review thank you email: " + e.getMessage());
-                }
-            }).start();
+            // Trigger Thank You Email (Runs instantly in the background because of @Async)
+            try {
+                emailService.sendReviewThankYouEmail(review.getUser(), review.getProduct());
+            } catch (Exception e) {
+                System.err.println("Failed to trigger review email: " + e.getMessage());
+            }
             
             return ResponseEntity.ok("Review and media saved!");
             

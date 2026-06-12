@@ -17,17 +17,19 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/orders")
-//@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(origins = "*") // Updated for deployment
 public class OrderController {
 
     private final OrderService orderService;
     private final OrderRepository orderRepository;
     private final EmailService emailService;
+    
     public OrderController(OrderService orderService, OrderRepository orderRepository, EmailService emailService) {
         this.orderService = orderService;
         this.orderRepository = orderRepository;
         this.emailService = emailService;
     }
+    
     // --- Inner DTOs to catch the React Cart JSON Array ---
     public static class OrderPayload {
         public Long userId;
@@ -105,7 +107,7 @@ public class OrderController {
         }
     }
 
-@PutMapping("/{id}/status")
+    @PutMapping("/{id}/status")
     public ResponseEntity<?> updateOrderStatus(@PathVariable Long id, @RequestBody java.util.Map<String, String> payload) {
         try {
             String incomingStatus = payload.get("status").toUpperCase().trim();
@@ -127,11 +129,12 @@ public class OrderController {
             
             com.incubatorsshop.backend.entity.Order savedOrder = orderRepository.save(order);
 
-            // --- NEW: Trigger Email Notification for Status Change ---
-            // Run asynchronously to avoid slowing down the UI response
-            new Thread(() -> {
+            // <-- REPLACED: Removed the manual thread, relying purely on @Async safely
+            try {
                 emailService.sendOrderStatusEmail(savedOrder);
-            }).start();
+            } catch (Exception ex) {
+                System.err.println("Non-fatal email error: " + ex.getMessage());
+            }
 
             return ResponseEntity.ok(savedOrder);
             
