@@ -10,6 +10,7 @@ public class IncubatorsShopBackendApplication {
 
 	public static void main(String[] args) {
 		SpringApplication.run(IncubatorsShopBackendApplication.class, args);
+		// Triggering a test redeploy
 	}
 
 }
