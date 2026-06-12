@@ -94,6 +94,8 @@ public class ProfileController {
                     Map<String, String> contact = new java.util.HashMap<>();
                     contact.put("fullName", user.getFullName());
                     contact.put("mobileNumber", user.getMobileNumber());
+                    contact.put("email", user.getEmail());
+                    contact.put("address", user.getAddress());
                     return ResponseEntity.ok(contact);
                 }
             }
