@@ -84,4 +84,22 @@ public class ProfileController {
         userRepository.save(user);
         return ResponseEntity.ok("Password updated successfully.");
     }
+    @GetMapping("/admin-contact")
+    public ResponseEntity<?> getAdminContact() {
+        try {
+            // Securely fetches the first admin to dynamically show their contact info on the frontend
+            java.util.List<User> allUsers = userRepository.findAll();
+            for (User user : allUsers) {
+                if ("ADMIN".equalsIgnoreCase(user.getRole())) {
+                    Map<String, String> contact = new java.util.HashMap<>();
+                    contact.put("fullName", user.getFullName());
+                    contact.put("mobileNumber", user.getMobileNumber());
+                    return ResponseEntity.ok(contact);
+                }
+            }
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Admin not found.");
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
 }
