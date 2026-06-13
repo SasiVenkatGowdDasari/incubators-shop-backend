@@ -17,43 +17,36 @@ import java.util.List;
 @EnableWebSecurity
 public class SecurityConfig {
 
-    private final AppProperties appProperties;
+	private final AppProperties appProperties;
 
-    public SecurityConfig(AppProperties appProperties) {
-        this.appProperties = appProperties;
-    }
+	public SecurityConfig(AppProperties appProperties) {
+		this.appProperties = appProperties;
+	}
 
-    @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http
-            .csrf(csrf -> csrf.disable())
-            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/**").permitAll()
-                .requestMatchers("/api/oauth2/**").permitAll()
-                .requestMatchers("/api/products/**").permitAll()
-                .anyRequest().permitAll() 
-            )
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+	@Bean
+	public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+		http.csrf(csrf -> csrf.disable()).cors(cors -> cors.configurationSource(corsConfigurationSource()))
+				.authorizeHttpRequests(
+						auth -> auth.requestMatchers("/api/auth/**").permitAll().requestMatchers("/api/oauth2/**")
+								.permitAll().requestMatchers("/api/products/**").permitAll().anyRequest().permitAll())
+				.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
 
-        return http.build();
-    }
+		return http.build();
+	}
 
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration configuration = new CorsConfiguration();
-        
-        // Explicitly add your specific URLs here
-        configuration.setAllowedOriginPatterns(Arrays.asList(
-            "http://localhost:5173", 
-            "https://venkat-incubators-shop-qez3af2cf.vercel.app"
-        ));
-        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("*"));
-        configuration.setAllowCredentials(true);
+	@Bean
+	public CorsConfigurationSource corsConfigurationSource() {
+		CorsConfiguration configuration = new CorsConfiguration();
 
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", configuration);
-        return source;
-    }
+		// Explicitly add your specific URLs here
+		configuration.setAllowedOriginPatterns(Arrays.asList("http://localhost:5173",
+				"https://venkat-incubators-shop-qez3af2cf.vercel.app", "https://venkat-incubators-shop.vercel.app"));
+		configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+		configuration.setAllowedHeaders(List.of("*"));
+		configuration.setAllowCredentials(true);
+
+		UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+		source.registerCorsConfiguration("/**", configuration);
+		return source;
+	}
 }
