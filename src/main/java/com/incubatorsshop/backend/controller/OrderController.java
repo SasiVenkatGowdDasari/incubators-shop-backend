@@ -4,7 +4,6 @@ import com.incubatorsshop.backend.dto.DeliveryVerificationRequest;
 import com.incubatorsshop.backend.dto.DispatchOrderRequest;
 import com.incubatorsshop.backend.entity.Order;
 import com.incubatorsshop.backend.repository.OrderRepository;
-import com.incubatorsshop.backend.service.EmailService;
 import com.incubatorsshop.backend.service.OrderService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,20 +16,18 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/orders")
-@CrossOrigin(origins = "*") // Updated for deployment
+@CrossOrigin(origins = "*")
 public class OrderController {
 
     private final OrderService orderService;
     private final OrderRepository orderRepository;
-    private final EmailService emailService;
     
-    public OrderController(OrderService orderService, OrderRepository orderRepository, EmailService emailService) {
+    // Removed EmailService injection from here
+    public OrderController(OrderService orderService, OrderRepository orderRepository) {
         this.orderService = orderService;
         this.orderRepository = orderRepository;
-        this.emailService = emailService;
     }
     
-    // --- Inner DTOs to catch the React Cart JSON Array ---
     public static class OrderPayload {
         public Long userId;
         public Double totalAmount;
@@ -43,12 +40,10 @@ public class OrderController {
         public Double price;
     }
 
-    // CUSTOMER: Place a new order
     @PostMapping
     public ResponseEntity<?> placeOrder(@RequestBody OrderPayload payload) {
         try {
             for (ItemPayload item : payload.items) {
-                // Calls the 3-argument method from your updated service
                 orderService.placeOrder(payload.userId, item.productId, item.quantity);
             }
             return ResponseEntity.ok("Order placed successfully");
@@ -57,7 +52,6 @@ public class OrderController {
         }
     }
 
-    // CUSTOMER: Fetch My Orders
     @GetMapping("/user/{userId}")
     public ResponseEntity<?> getUserOrders(@PathVariable Long userId) {
         List<Order> orders = orderRepository.findByUserId(userId);
@@ -79,13 +73,11 @@ public class OrderController {
         return ResponseEntity.ok(response);
     }
         
-    // ADMIN: Fetch All Orders
     @GetMapping
     public ResponseEntity<List<Order>> getAllOrders() {
         return ResponseEntity.ok(orderRepository.findAll());
     }
 
-    // ADMIN: Dispatch Order
     @PutMapping("/{orderId}/dispatch")
     public ResponseEntity<String> dispatchOrder(@PathVariable Long orderId, @RequestBody DispatchOrderRequest request) {
         try {
@@ -96,7 +88,6 @@ public class OrderController {
         }
     }
 
-    // CUSTOMER: Verify Delivery
     @PostMapping("/{orderId}/verify-delivery")
     public ResponseEntity<String> verifyDelivery(@PathVariable Long orderId, @RequestBody DeliveryVerificationRequest request) {
         try {
@@ -129,12 +120,7 @@ public class OrderController {
             
             com.incubatorsshop.backend.entity.Order savedOrder = orderRepository.save(order);
 
-            // <-- REPLACED: Removed the manual thread, relying purely on @Async safely
-            try {
-                emailService.sendOrderStatusEmail(savedOrder);
-            } catch (Exception ex) {
-                System.err.println("Non-fatal email error: " + ex.getMessage());
-            }
+            // Removed the emailService call from here so it doesn't crash on status updates!
 
             return ResponseEntity.ok(savedOrder);
             

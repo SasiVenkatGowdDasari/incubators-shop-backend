@@ -29,7 +29,6 @@ public class AuthController {
         this.otpService = otpService;
     }
 
-    // --- LOCAL REGISTRATION ---
     @PostMapping("/register")
     public ResponseEntity<?> registerUser(@RequestBody RegistrationRequest request) {
         try {
@@ -40,7 +39,6 @@ public class AuthController {
         }
     }
 
-    // --- LOGIN ---
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest request) {
         User user = userRepository.findByMobileNumber(request.getMobileNumber());
@@ -50,7 +48,6 @@ public class AuthController {
         return ResponseEntity.ok(user);
     }
 
-    // --- CHECK EXISTS ---
     @PostMapping("/check-mobile")
     public ResponseEntity<?> checkMobileExists(@RequestBody Map<String, String> request) {
         String mobileNumber = request.get("mobileNumber");
@@ -60,17 +57,6 @@ public class AuthController {
             return ResponseEntity.ok("Account exists.");
         }
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body("No account found with this number.");
-    }
-
-    @PostMapping("/check-email")
-    public ResponseEntity<?> checkEmailExists(@RequestBody Map<String, String> request) {
-        String email = request.get("email");
-        User user = userRepository.findByEmail(email); 
-        
-        if (user != null) {
-            return ResponseEntity.ok("Email already exists.");
-        }
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Email is available.");
     }
 
     @PutMapping("/reset-password")
@@ -87,36 +73,6 @@ public class AuthController {
         return ResponseEntity.ok("Password updated successfully.");
     }
 
-    // =====================================
-    // REAL EMAIL OTP ENDPOINTS
-    // =====================================
-    @PostMapping("/send-email-otp")
-    public ResponseEntity<?> sendEmailOtp(@RequestBody Map<String, String> payload) {
-        String email = payload.get("email");
-        if (email == null || email.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body("Email required");
-        }
-        
-        otpService.generateAndSendEmailOtp(email);
-        return ResponseEntity.ok("OTP sent securely to email.");
-    }
-
-    @PostMapping("/verify-email-otp")
-    public ResponseEntity<?> verifyEmailOtp(@RequestBody Map<String, String> payload) {
-        String email = payload.get("email");
-        String otp = payload.get("otp");
-        
-        boolean isValid = otpService.verifyEmailOtp(email, otp);
-        if (isValid) {
-            return ResponseEntity.ok("Email successfully verified.");
-        } else {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid or Expired OTP. Please request a new one.");
-        }
-    }
-
-    // =====================================
-    // NEW: REAL MOBILE OTP ENDPOINTS
-    // =====================================
     @PostMapping("/send-mobile-otp")
     public ResponseEntity<?> sendMobileOtp(@RequestBody Map<String, String> payload) {
         String mobileNumber = payload.get("mobileNumber");
