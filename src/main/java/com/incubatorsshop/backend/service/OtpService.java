@@ -147,19 +147,21 @@ public class OtpService {
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            String responseBody = response.body().toLowerCase();
-
-            // 🚨 CRITICAL FIX: Strict checking of the JSON body for failure keywords
+            
+            // 🚨 STRICT JSON PARSING FIX 🚨
             if (response.statusCode() == 200) {
-                if (responseBody.contains("invalid") || responseBody.contains("failed") || responseBody.contains("error") || responseBody.contains("incorrect")) {
-                    logger.warn("⚠️ Wrong OTP typed for " + mobileNumber + ". Message Central says: " + response.body());
-                    return false; // Force it to fail!
-                }
+                JsonNode root = mapper.readTree(response.body());
                 
-                // If no error words are found in the body, it is a real success!
-                verificationStorage.remove(mobileNumber);
-                return true;
+                // Explicitly check the internal JSON responseCode provided by Message Central
+                if (root.has("responseCode") && root.get("responseCode").asInt() == 200) {
+                    verificationStorage.remove(mobileNumber);
+                    return true; // 100% Verified Correct
+                } else {
+                    logger.warn("⚠️ Wrong OTP typed for " + mobileNumber + ". Message Central says: " + response.body());
+                    return false; // Blocked!
+                }
             } else {
+                logger.error("❌ API HTTP Error: " + response.statusCode() + " - " + response.body());
                 return false;
             }
         } catch (Exception e) {
