@@ -22,9 +22,7 @@ public class OtpService {
 
     private static final Logger logger = LoggerFactory.getLogger(OtpService.class);
     
-    // Maps mobileNumber -> Verification ID from Message Central
     private final Map<String, VerificationSession> verificationStorage = new ConcurrentHashMap<>();
-    
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -39,7 +37,6 @@ public class OtpService {
 
     private volatile String cachedAuthToken = null;
 
-    // Helper class to track OTP expiry times securely
     private static class VerificationSession {
         final String verificationId;
         final long timestamp;
@@ -87,8 +84,16 @@ public class OtpService {
         throw new RuntimeException("Failed to obtain Auth Token.");
     }
 
+    // ===================================================
+    // 1. GENERATE & SEND MOBILE OTP (WITH AUTO-RETRY)
+    // ===================================================
     @Async
     public void generateAndSendMobileOtp(String rawMobileNumber) {
+        // Kick off the dispatch and allow it to retry exactly once if the token is dead
+        executeDispatch(rawMobileNumber, true);
+    }
+
+    private void executeDispatch(String rawMobileNumber, boolean allowRetry) {
         String mobileNumber = sanitizeMobileNumber(rawMobileNumber);
 
         try {
@@ -113,16 +118,28 @@ public class OtpService {
                     String verificationId = root.get("data").get("verificationId").asText();
                     verificationStorage.put(mobileNumber, new VerificationSession(verificationId));
                     logger.info("✅ WhatsApp OTP dispatched to: +91 " + mobileNumber);
+                } else {
+                    logger.error("❌ Provider missing verificationId: " + response.body());
                 }
-            } else if (response.statusCode() == 401) {
-                // Token expired, clear cache
+            } 
+            // 🚨 THE FIX: Catch the 401, clear cache, and immediately retry!
+            else if (response.statusCode() == 401 && allowRetry) {
+                logger.warn("⚠️ Auth Token expired. Fetching fresh token and retrying dispatch...");
                 cachedAuthToken = null; 
+                executeDispatch(rawMobileNumber, false); // false prevents infinite retry loops
+            } 
+            else {
+                logger.error("❌ Failed to dispatch OTP. Status " + response.statusCode() + ": " + response.body());
             }
+
         } catch (Exception e) {
             logger.error("❌ Critical failure during dispatch: " + e.getMessage());
         }
     }
 
+    // ===================================================
+    // 2. VERIFY MOBILE OTP 
+    // ===================================================
     public boolean verifyMobileOtp(String rawMobileNumber, String enteredOtp) {
         String mobileNumber = sanitizeMobileNumber(rawMobileNumber);
 
@@ -148,17 +165,15 @@ public class OtpService {
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             
-            // 🚨 STRICT JSON PARSING FIX 🚨
             if (response.statusCode() == 200) {
                 JsonNode root = mapper.readTree(response.body());
                 
-                // Explicitly check the internal JSON responseCode provided by Message Central
                 if (root.has("responseCode") && root.get("responseCode").asInt() == 200) {
                     verificationStorage.remove(mobileNumber);
                     return true; // 100% Verified Correct
                 } else {
                     logger.warn("⚠️ Wrong OTP typed for " + mobileNumber + ". Message Central says: " + response.body());
-                    return false; // Blocked!
+                    return false; 
                 }
             } else {
                 logger.error("❌ API HTTP Error: " + response.statusCode() + " - " + response.body());
