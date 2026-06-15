@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -22,11 +23,10 @@ public class OtpService {
 
     private static final Logger logger = LoggerFactory.getLogger(OtpService.class);
     
-    // Maps mobileNumber -> Verification ID from Message Central
-    private final Map<String, String> verificationStorage = new ConcurrentHashMap<>();
-    
+    private final Map<String, VerificationSession> verificationStorage = new ConcurrentHashMap<>();
     private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper mapper = new ObjectMapper(); // Parses JSON securely
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final Environment env;
 
     @Value("${messagecentral.customer.id}")
     private String customerId;
@@ -37,11 +37,38 @@ public class OtpService {
     @Value("${messagecentral.password.base64}")
     private String mcPasswordBase64;
 
-    // ===================================================
-    // HELPER: FETCH AUTH TOKEN FROM MESSAGE CENTRAL
-    // ===================================================
-    private String getAuthToken() throws Exception {
-        // Crucial: Base64 strings end in '=', which must be URL encoded or the API crashes
+    // Volatile token cache to minimize API round-trips
+    private volatile String cachedAuthToken = null;
+
+    public OtpService(Environment env) {
+        this.env = env;
+    }
+
+    private static class VerificationSession {
+        final String verificationId;
+        final long timestamp;
+
+        VerificationSession(String verificationId) {
+            this.verificationId = verificationId;
+            this.timestamp = System.currentTimeMillis();
+        }
+    }
+
+    // Clean up inputs to prevent URL parameter injection bugs
+    private String sanitizeMobileNumber(String mobileNumber) {
+        if (mobileNumber == null) return "";
+        String digits = mobileNumber.replaceAll("\\D", ""); 
+        if (digits.startsWith("91") && digits.length() == 12) {
+            return digits.substring(2);
+        }
+        return digits;
+    }
+
+    private synchronized String getAuthToken() throws Exception {
+        if (cachedAuthToken != null) {
+            return cachedAuthToken;
+        }
+
         String encodedPassword = URLEncoder.encode(mcPasswordBase64, StandardCharsets.UTF_8);
         String tokenUrl = String.format(
             "https://cpaas.messagecentral.com/auth/v1/authentication/token?country=91&customerId=%s&email=%s&key=%s&scope=NEW",
@@ -56,25 +83,25 @@ public class OtpService {
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         
-        // Extract the token string securely
-        try {
-            JsonNode node = mapper.readTree(response.body());
-            if (node.has("token")) return node.get("token").asText();
-        } catch (Exception e) {
-            // Fallback if API returns raw string instead of JSON
+        JsonNode node = mapper.readTree(response.body());
+        if (node.has("token")) {
+            cachedAuthToken = node.get("token").asText();
+            return cachedAuthToken;
         }
-        return response.body().replace("\"", "").trim();
+        
+        throw new RuntimeException("Failed to obtain valid authentication token from provider.");
     }
 
-    // ===================================================
-    // 1. GENERATE & SEND MOBILE OTP (via WhatsApp)
-    // ===================================================
     @Async
-    public void generateAndSendMobileOtp(String mobileNumber) {
+    public void generateAndSendMobileOtp(String rawMobileNumber) {
+        String mobileNumber = sanitizeMobileNumber(rawMobileNumber);
+        if (mobileNumber.length() != 10) {
+            logger.error("❌ Invalid mobile number format skipped dispatch: " + rawMobileNumber);
+            return;
+        }
+
         try {
             String authToken = getAuthToken();
-            
-            // flowType=WHATSAPP guarantees no DLT registration is needed
             String sendUrl = String.format(
                 "https://cpaas.messagecentral.com/verification/v3/send?countryCode=91&customerId=%s&flowType=WHATSAPP&mobileNumber=%s",
                 customerId, mobileNumber
@@ -82,7 +109,7 @@ public class OtpService {
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(sendUrl))
-                    .POST(HttpRequest.BodyPublishers.noBody()) // Empty body, params are in URL
+                    .POST(HttpRequest.BodyPublishers.noBody())
                     .header("authToken", authToken)
                     .header("Accept", "*/*")
                     .build();
@@ -93,45 +120,40 @@ public class OtpService {
                 JsonNode root = mapper.readTree(response.body());
                 if (root.has("data") && root.get("data").has("verificationId")) {
                     String verificationId = root.get("data").get("verificationId").asText();
-                    
-                    // We save the Verification ID instead of the OTP itself!
-                    verificationStorage.put(mobileNumber, verificationId);
-                    logger.info("✅ WhatsApp OTP successfully dispatched to +91 " + mobileNumber);
-                } else {
-                    logger.error("❌ Message Central missing verificationId: " + response.body());
+                    verificationStorage.put(mobileNumber, new VerificationSession(verificationId));
+                    logger.info("✅ WhatsApp OTP dispatched to clean target: +91 " + mobileNumber);
                 }
-            } else {
-                logger.error("❌ Failed to dispatch OTP. Status " + response.statusCode() + ": " + response.body());
+            } else if (response.statusCode() == 401) {
+                // Invalidate cache immediately on authorization failures to trigger retry next cycle
+                cachedAuthToken = null; 
+                logger.error("❌ Token expired. Resetting credentials stream.");
             }
-
         } catch (Exception e) {
-            logger.error("❌ Critical failure calling Message Central Send API: " + e.getMessage());
+            logger.error("❌ Critical failure during provider communication sequence: " + e.getMessage());
         }
     }
 
-    // ===================================================
-    // 2. VERIFY MOBILE OTP (via Message Central)
-    // ===================================================
-    public boolean verifyMobileOtp(String mobileNumber, String enteredOtp) {
-        // Safe Master Key Bypass for UI Testing
-        if ("123456".equals(enteredOtp)) {
+    public boolean verifyMobileOtp(String rawMobileNumber, String enteredOtp) {
+        String mobileNumber = sanitizeMobileNumber(rawMobileNumber);
+
+        // Secure conditional wrapper restricting test values from deployment profiles
+        if ("123456".equals(enteredOtp) && !env.acceptsProfiles(org.springframework.core.env.Profiles.of("prod"))) {
             verificationStorage.remove(mobileNumber);
             return true;
         }
 
-        String verificationId = verificationStorage.get(mobileNumber);
-        if (verificationId == null) {
-            logger.warn("No active verification session found for " + mobileNumber);
+        VerificationSession session = verificationStorage.get(mobileNumber);
+        if (session == null || (System.currentTimeMillis() - session.timestamp > 600000)) { // 10 Min Expiry
+            verificationStorage.remove(mobileNumber);
+            logger.warn("⚠️ Expired or non-existent session evaluated for: " + mobileNumber);
             return false;
         }
 
         try {
             String authToken = getAuthToken();
-            
-            // Ask Message Central if the code the user typed is correct
             String validateUrl = String.format(
                 "https://cpaas.messagecentral.com/verification/v3/validateOtp?countryCode=91&mobileNumber=%s&verificationId=%s&customerId=%s&code=%s",
-                mobileNumber, verificationId, customerId, enteredOtp
+                mobileNumber, session.verificationId, customerId, enteredOtp
             );
 
             HttpRequest request = HttpRequest.newBuilder()
@@ -144,16 +166,13 @@ public class OtpService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() == 200) {
-                // Verification successful, clear the cache
                 verificationStorage.remove(mobileNumber);
                 return true;
             } else {
-                logger.warn("⚠️ Invalid OTP attempt for " + mobileNumber + ": " + response.body());
                 return false;
             }
-
         } catch (Exception e) {
-            logger.error("❌ Critical failure calling Message Central Validate API: " + e.getMessage());
+            logger.error("❌ Critical system failure verification parsing: " + e.getMessage());
             return false;
         }
     }
