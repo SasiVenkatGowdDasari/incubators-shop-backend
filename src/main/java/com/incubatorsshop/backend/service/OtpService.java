@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -23,10 +22,11 @@ public class OtpService {
 
     private static final Logger logger = LoggerFactory.getLogger(OtpService.class);
     
+    // Maps mobileNumber -> Verification ID from Message Central
     private final Map<String, VerificationSession> verificationStorage = new ConcurrentHashMap<>();
+    
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper mapper = new ObjectMapper();
-    private final Environment env;
 
     @Value("${messagecentral.customer.id}")
     private String customerId;
@@ -37,13 +37,9 @@ public class OtpService {
     @Value("${messagecentral.password.base64}")
     private String mcPasswordBase64;
 
-    // Volatile token cache to minimize API round-trips
     private volatile String cachedAuthToken = null;
 
-    public OtpService(Environment env) {
-        this.env = env;
-    }
-
+    // Helper class to track OTP expiry times securely
     private static class VerificationSession {
         final String verificationId;
         final long timestamp;
@@ -54,7 +50,6 @@ public class OtpService {
         }
     }
 
-    // Clean up inputs to prevent URL parameter injection bugs
     private String sanitizeMobileNumber(String mobileNumber) {
         if (mobileNumber == null) return "";
         String digits = mobileNumber.replaceAll("\\D", ""); 
@@ -89,16 +84,12 @@ public class OtpService {
             return cachedAuthToken;
         }
         
-        throw new RuntimeException("Failed to obtain valid authentication token from provider.");
+        throw new RuntimeException("Failed to obtain Auth Token.");
     }
 
     @Async
     public void generateAndSendMobileOtp(String rawMobileNumber) {
         String mobileNumber = sanitizeMobileNumber(rawMobileNumber);
-        if (mobileNumber.length() != 10) {
-            logger.error("❌ Invalid mobile number format skipped dispatch: " + rawMobileNumber);
-            return;
-        }
 
         try {
             String authToken = getAuthToken();
@@ -121,32 +112,24 @@ public class OtpService {
                 if (root.has("data") && root.get("data").has("verificationId")) {
                     String verificationId = root.get("data").get("verificationId").asText();
                     verificationStorage.put(mobileNumber, new VerificationSession(verificationId));
-                    logger.info("✅ WhatsApp OTP dispatched to clean target: +91 " + mobileNumber);
+                    logger.info("✅ WhatsApp OTP dispatched to: +91 " + mobileNumber);
                 }
             } else if (response.statusCode() == 401) {
-                // Invalidate cache immediately on authorization failures to trigger retry next cycle
+                // Token expired, clear cache
                 cachedAuthToken = null; 
-                logger.error("❌ Token expired. Resetting credentials stream.");
             }
         } catch (Exception e) {
-            logger.error("❌ Critical failure during provider communication sequence: " + e.getMessage());
+            logger.error("❌ Critical failure during dispatch: " + e.getMessage());
         }
     }
 
     public boolean verifyMobileOtp(String rawMobileNumber, String enteredOtp) {
         String mobileNumber = sanitizeMobileNumber(rawMobileNumber);
 
-        // Secure conditional wrapper restricting test values from deployment profiles
-        if ("123456".equals(enteredOtp) && !env.acceptsProfiles(org.springframework.core.env.Profiles.of("prod"))) {
-            verificationStorage.remove(mobileNumber);
-            return true;
-        }
-
         VerificationSession session = verificationStorage.get(mobileNumber);
-        if (session == null || (System.currentTimeMillis() - session.timestamp > 600000)) { // 10 Min Expiry
+        if (session == null || (System.currentTimeMillis() - session.timestamp > 600000)) { 
             verificationStorage.remove(mobileNumber);
-            logger.warn("⚠️ Expired or non-existent session evaluated for: " + mobileNumber);
-            return false;
+            return false; // Session expired after 10 mins
         }
 
         try {
@@ -164,15 +147,23 @@ public class OtpService {
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            String responseBody = response.body().toLowerCase();
 
+            // 🚨 CRITICAL FIX: Strict checking of the JSON body for failure keywords
             if (response.statusCode() == 200) {
+                if (responseBody.contains("invalid") || responseBody.contains("failed") || responseBody.contains("error") || responseBody.contains("incorrect")) {
+                    logger.warn("⚠️ Wrong OTP typed for " + mobileNumber + ". Message Central says: " + response.body());
+                    return false; // Force it to fail!
+                }
+                
+                // If no error words are found in the body, it is a real success!
                 verificationStorage.remove(mobileNumber);
                 return true;
             } else {
                 return false;
             }
         } catch (Exception e) {
-            logger.error("❌ Critical system failure verification parsing: " + e.getMessage());
+            logger.error("❌ Critical failure validating OTP: " + e.getMessage());
             return false;
         }
     }
